@@ -1,0 +1,49 @@
+# Track only the main WMS app directory
+/*
+!/.gitignore
+!/wms/
+!/wms/**
+
+# macOS
+.DS_Store
+**/.DS_Store
+
+# Python caches / local runtime
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/*.pyd
+**/.pytest_cache/
+
+# Environment / secrets
+**/.env
+**/.env.*
+!**/.env.example
+
+# Dependencies
+**/node_modules/
+
+# Build artifacts
+**/dist/
+**/build/
+**/.vite/
+**/coverage/
+
+# Uploads / generated files
+**/uploads/
+
+# Local databases / dumps
+**/*.db
+**/*.sqlite
+**/*.sqlite3
+**/*.sql
+
+# Logs / temp
+**/*.log
+**/tmp/
+**/temp/
+**/.cache/
+
+# IDE
+**/.idea/
+**/.vscode/
