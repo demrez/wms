@@ -31,7 +31,7 @@ async function enrichOrdersForList(orders = []) {
   const ids = orders.map((order) => order.id);
   if (ids.length === 0) return orders;
 
-  const [supplyRows, logisticsRows, shipmentRows] = await Promise.all([
+  const [supplyRows, logisticsRows, shipmentRows, itemTotals] = await Promise.all([
     db('supply_details')
       .whereIn('order_id', ids)
       .select('order_id', 'delivery_date', 'pickup_address', 'places_count'),
@@ -41,20 +41,49 @@ async function enrichOrdersForList(orders = []) {
     db('order_marketplace_shipments')
       .whereIn('order_id', ids)
       .orderBy('created_at', 'asc')
-      .select('order_id', 'warehouse_name', 'ship_date', 'places_count'),
+      .select('order_id', 'warehouse_name', 'ship_date', 'places_count', 'quantity'),
+    db('order_items')
+      .whereIn('order_id', ids)
+      .groupBy('order_id')
+      .select(
+        'order_id',
+        db.raw('count(*) as items_count'),
+        db.raw('sum(coalesce(quantity, 0)) as total_qty'),
+        db.raw('sum(coalesce(ready_qty, 0)) as ready_qty_total'),
+        db.raw('sum(coalesce(defect_qty, 0)) as defect_qty_total')
+      ),
   ]);
 
   const supplyMap = new Map(supplyRows.map((row) => [row.order_id, row]));
   const logisticsMap = new Map(logisticsRows.map((row) => [row.order_id, row]));
   const shipmentMap = new Map();
+  const shipmentTotalsMap = new Map();
   shipmentRows.forEach((row) => {
     if (!shipmentMap.has(row.order_id)) shipmentMap.set(row.order_id, row);
+    const current = shipmentTotalsMap.get(row.order_id) || { shipment_qty: 0, places_count: 0 };
+    current.shipment_qty += Number(row.quantity || 0);
+    current.places_count += Number(row.places_count || 0);
+    shipmentTotalsMap.set(row.order_id, current);
   });
+  const itemTotalsMap = new Map(itemTotals.map((row) => [row.order_id, row]));
 
   orders.forEach((order) => {
     const supply = supplyMap.get(order.id);
     const logistics = logisticsMap.get(order.id);
     const shipment = shipmentMap.get(order.id);
+    const shipmentTotals = shipmentTotalsMap.get(order.id) || { shipment_qty: 0, places_count: 0 };
+    const totals = itemTotalsMap.get(order.id) || {};
+    const totalQty = Number(totals.total_qty || 0);
+    const readyQty = Number(totals.ready_qty_total || 0);
+    const defectQty = Number(totals.defect_qty_total || 0);
+    const handledQty = readyQty + defectQty;
+    const shipmentQty = Number(shipmentTotals.shipment_qty || 0);
+    const progressBase = order.type === 'logistics'
+      ? Math.max(totalQty, shipmentQty)
+      : totalQty;
+    const progressValue = order.type === 'logistics'
+      ? (shipmentQty || readyQty)
+      : handledQty;
 
     order.shipping_warehouse =
       shipment?.warehouse_name ||
@@ -69,10 +98,19 @@ async function enrichOrdersForList(orders = []) {
       null;
 
     order.boxes_count = Number(
-      shipment?.places_count ??
-      supply?.places_count ??
+      shipmentTotals.places_count ||
+      supply?.places_count ||
       0
     );
+    order.items_count = Number(totals.items_count || 0);
+    order.total_qty = totalQty;
+    order.ready_qty_total = readyQty;
+    order.defect_qty_total = defectQty;
+    order.handled_qty_total = handledQty;
+    order.shipment_qty = shipmentQty;
+    order.progress_percent = progressBase > 0
+      ? Math.max(0, Math.min(100, Math.round((progressValue / progressBase) * 100)))
+      : 0;
   });
 
   return orders;
@@ -634,18 +672,6 @@ router.get('/', async (req, res) => {
   }
 
   const orders = await q;
-
-  // Для каждого заказа добавляем сумму кол-ва
-  const ids = orders.map(o => o.id);
-  if (ids.length > 0) {
-    const sums = await db('order_items')
-      .whereIn('order_id', ids)
-      .groupBy('order_id')
-      .select('order_id', db.raw('sum(quantity) as total_qty'));
-    const sumMap = Object.fromEntries(sums.map(s => [s.order_id, s.total_qty]));
-    orders.forEach(o => { o.total_qty = sumMap[o.id] || 0; });
-  }
-
   await enrichOrdersForList(orders);
 
   res.json(orders);
@@ -663,6 +689,7 @@ router.get('/kanban', async (req, res) => {
   }
 
   const orders = await q.orderBy('orders.created_at');
+  await enrichOrdersForList(orders);
   const byStage = {};
   orders.forEach(o => {
     if (!byStage[o.stage]) byStage[o.stage] = [];

@@ -166,6 +166,16 @@ router.get('/:id', async (req, res) => {
       db.raw("sum(case when status = 'active' then 1 else 0 end) as active_orders")
     );
 
+  const [invoicesAgg] = await db('invoices')
+    .where('company_id', req.params.id)
+    .select(
+      db.raw('count(*) as total_invoices'),
+      db.raw("sum(case when status in ('draft', 'sent', 'deferred') then 1 else 0 end) as active_invoices"),
+      db.raw("sum(case when status = 'paid' then 1 else 0 end) as paid_invoices"),
+      db.raw("coalesce(sum(total), 0) as total_invoice_amount"),
+      db.raw("coalesce(sum(case when status != 'paid' and status != 'cancelled' then total else 0 end), 0) as pending_invoice_amount")
+    );
+
   const products = await db('products')
     .leftJoin('stock', 'stock.product_id', 'products.id')
     .where('products.company_id', req.params.id)
@@ -213,6 +223,7 @@ router.get('/:id', async (req, res) => {
     ...company,
     stock: stockAgg,
     orders: ordersAgg,
+    invoices: invoicesAgg,
     products,
     recent_orders: recentOrders,
   });

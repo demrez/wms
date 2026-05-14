@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useWarehouseSummary, useWarehouseOps, useDefects, useWarehouseOp, useProducts, useCompanies, useTogglePaidStorage } from '../hooks/queries';
 import { PageHeader, Button, Modal, Select, Input, fmt, Spinner, Empty, Badge } from '../components/ui';
 import useDismissibleDropdown from '../hooks/useDismissibleDropdown';
@@ -114,6 +115,7 @@ function OpModal({ open, onClose }) {
 }
 
 export default function Warehouse() {
+  const [searchParams, setSearchParams] = useSearchParams();
   const [tab, setTab] = useState('summary');
   const [opModal, setOpModal] = useState(false);
   const [opsFilter, setOpsFilter] = useState('');
@@ -139,45 +141,89 @@ export default function Warehouse() {
 
   const totalQty = summary?.reduce((s,r) => s + Number(r.quantity), 0) || 0;
   const totalDefects = defects?.reduce((s,r) => s + Number(r.defect_qty), 0) || 0;
+  const totalProducts = summary?.reduce((s, r) => s + Number(r.products_count), 0) || 0;
   const filteredSummary = summary?.filter((row) =>
     !summarySearch || row.name.toLowerCase().includes(summarySearch.toLowerCase())
   );
   const defectPaidCount = defects?.filter((row) => row.paid_storage).length || 0;
+  const maxSummaryQty = Math.max(...(summary || []).map((row) => Number(row.quantity) || 0), 0);
+  const defectPositionCount = defects?.length || 0;
+  const defectPercent = totalQty > 0 ? (totalDefects / totalQty) * 100 : 0;
   const summaryCards = filteredSummary || [];
   const opsCards = ops || [];
   const defectCards = defects || [];
+  const formatDate = (value) => new Date(value).toLocaleDateString('ru-RU');
+  const formatDateTime = (value) => new Date(value).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+  const resetOpsFilters = () => {
+    setOpsFilter('');
+    setCompanyFilter('');
+    setProductFilter('');
+    setDateFrom('');
+    setDateTo('');
+  };
+
+  useEffect(() => {
+    const nextTab = searchParams.get('tab');
+    if (nextTab && ['summary', 'ops', 'defects'].includes(nextTab)) {
+      setTab(nextTab);
+    }
+  }, [searchParams]);
+
+  const handleTabChange = (nextTab) => {
+    setTab(nextTab);
+    const nextParams = new URLSearchParams(searchParams);
+    if (nextTab === 'summary') nextParams.delete('tab');
+    else nextParams.set('tab', nextTab);
+    setSearchParams(nextParams, { replace: true });
+  };
 
   return (
-    <div>
+    <div className="warehouse-page">
       <PageHeader title="Склад">
         <Button onClick={() => setOpModal(true)}>+ Провести операцию</Button>
       </PageHeader>
 
-      <div className="desktop-only stats-grid" style={{ gridTemplateColumns:'repeat(4,1fr)' }}>
-        <div className="stat-card"><div className="stat-label">Компаний</div><div className="stat-value">{summary?.length || 0}</div></div>
-        <div className="stat-card"><div className="stat-label">Единиц на складе</div><div className="stat-value">{fmt(totalQty)}</div></div>
-        <div className="stat-card"><div className="stat-label">Брак</div><div className="stat-value" style={{ color:'var(--red-400)' }}>{fmt(totalDefects)}</div></div>
-        <div className="stat-card"><div className="stat-label">Платное хранение</div><div className="stat-value">{fmt(defectPaidCount)}</div></div>
+      <div className="desktop-only warehouse-stats-grid">
+        <div className="warehouse-stat-card">
+          <div className="warehouse-stat-label">Компаний</div>
+          <div className="warehouse-stat-value">{fmt(summary?.length || 0)}</div>
+          <div className="warehouse-stat-sub">с товарами на складе</div>
+        </div>
+        <div className="warehouse-stat-card">
+          <div className="warehouse-stat-label">Единиц</div>
+          <div className="warehouse-stat-value warehouse-stat-value-teal">{fmt(totalQty)}</div>
+          <div className="warehouse-stat-sub">на складе всего</div>
+        </div>
+        <div className="warehouse-stat-card">
+          <div className="warehouse-stat-label">Брак</div>
+          <div className="warehouse-stat-value warehouse-stat-value-red">{fmt(totalDefects)}</div>
+          <div className="warehouse-stat-sub">{defectPercent.toFixed(1)}% от остатка</div>
+        </div>
+        <div className="warehouse-stat-card">
+          <div className="warehouse-stat-label">Платное хран.</div>
+          <div className="warehouse-stat-value warehouse-stat-value-amber">{fmt(defectPaidCount)}</div>
+          <div className="warehouse-stat-sub">товаров на особых условиях</div>
+        </div>
       </div>
       <div className="mobile-only" style={{ marginBottom: 18 }}>
         <div className="mobile-stat-strip">
           <div className="mobile-stat-card"><div className="mobile-stat-card-label">Компаний</div><div className="mobile-stat-card-value">{fmt(summary?.length || 0)}</div></div>
-          <div className="mobile-stat-card"><div className="mobile-stat-card-label">Единиц на складе</div><div className="mobile-stat-card-value">{fmt(totalQty)}</div></div>
+          <div className="mobile-stat-card"><div className="mobile-stat-card-label">Единиц</div><div className="mobile-stat-card-value">{fmt(totalQty)}</div></div>
           <div className="mobile-stat-card"><div className="mobile-stat-card-label">Брак</div><div className="mobile-stat-card-value mobile-stat-card-value-red">{fmt(totalDefects)}</div></div>
-          <div className="mobile-stat-card"><div className="mobile-stat-card-label">Платное хранение</div><div className="mobile-stat-card-value">{fmt(defectPaidCount)}</div></div>
+          <div className="mobile-stat-card"><div className="mobile-stat-card-label">Платное хран.</div><div className="mobile-stat-card-value mobile-stat-card-value-amber">{fmt(defectPaidCount)}</div></div>
         </div>
       </div>
 
-      <div className="card">
-        <div className="tab-bar">
+      <div className="card warehouse-card">
+        <div className="tab-bar warehouse-tab-bar">
           {[['summary',`Учёт (${summary?.length||0})`],['ops',`Операции (${ops?.length||0})`],['defects',`Брак (${defects?.length||0})`]].map(([k,l]) => (
-            <button key={k} className={`tab-btn${tab===k?' active':''}`} onClick={() => setTab(k)}>{l}</button>
+            <button key={k} className={`tab-btn${tab===k?' active':''}`} onClick={() => handleTabChange(k)}>{l}</button>
           ))}
         </div>
 
         {tab === 'summary' && (
           <>
-            <div style={{ padding:'12px 16px', borderBottom:'1px solid var(--gray-100)' }}>
+            <div className="warehouse-search-row">
               <input
                 className="search-input"
                 value={summarySearch}
@@ -185,17 +231,27 @@ export default function Warehouse() {
                 placeholder="Поиск по компании..."
               />
             </div>
-            <div className="desktop-only table-wrap">
-              <table>
-                <thead><tr><th>№</th><th>Компания</th><th style={{textAlign:'right'}}>Количество</th><th style={{textAlign:'right'}}>Брак</th><th style={{textAlign:'right'}}>Товаров</th></tr></thead>
+            <div className="desktop-only table-wrap warehouse-table-wrap">
+              <table className="warehouse-table">
+                <thead><tr><th style={{ width: 44 }}>№</th><th>Компания</th><th style={{ width: 220 }}>Распределение</th><th className="tr-right">Остаток</th><th className="tr-right">Брак</th><th className="tr-right">Товаров</th></tr></thead>
                 <tbody>
                   {summaryCards.map((r,i) => (
                     <tr key={r.id}>
-                      <td className="text-muted text-sm">{i+1}</td>
-                      <td style={{ fontWeight:500 }}>{r.name}</td>
-                      <td className="text-right text-teal">{fmt(r.quantity)}</td>
-                      <td className="text-right" style={{ color: Number(r.defect_qty) > 0 ? 'var(--red-400)' : 'var(--gray-400)' }}>{fmt(r.defect_qty)}</td>
-                      <td className="text-right text-muted">{r.products_count}</td>
+                      <td className="text-muted text-sm">{i + 1}</td>
+                      <td className="warehouse-table-company">{r.name}</td>
+                      <td>
+                        <div className="warehouse-distribution">
+                          <div className="warehouse-distribution-track">
+                            <div className="warehouse-distribution-fill" style={{ width: `${maxSummaryQty ? Math.max(6, Math.round((Number(r.quantity) / maxSummaryQty) * 100)) : 0}%` }} />
+                          </div>
+                          <span className="warehouse-distribution-pct">
+                            {maxSummaryQty ? Math.round((Number(r.quantity) / maxSummaryQty) * 100) : 0}%
+                          </span>
+                        </div>
+                      </td>
+                      <td className="tr-right warehouse-number-teal">{fmt(r.quantity)}</td>
+                      <td className="tr-right" style={{ color: Number(r.defect_qty) > 0 ? 'var(--red-400)' : 'var(--gray-500)', fontWeight: 600 }}>{fmt(r.defect_qty)}</td>
+                      <td className="tr-right text-muted">{fmt(r.products_count)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -235,11 +291,13 @@ export default function Warehouse() {
         )}
 
         {tab === 'ops' && <>
-          <div className="admin-warehouse-ops-filters" style={{ padding:'10px 16px', borderBottom:'1px solid var(--gray-100)', display:'flex', gap:8, flexWrap:'wrap' }}>
-            {[['','Все'],['in','Приход'],['out','Расход'],['defect','Брак'],['write_off','Списание']].map(([v,l]) => (
-              <button key={v} className={`filter-tab${opsFilter===v?' active':''}`} style={{ background: opsFilter===v ? 'var(--teal-50)' : 'none', color: opsFilter===v ? 'var(--teal-600)' : undefined }} onClick={() => setOpsFilter(v)}>{l}</button>
-            ))}
-            <div className="toolbar admin-warehouse-ops-toolbar" style={{ marginBottom: 0 }}>
+          <div className="warehouse-filter-row">
+            <div className="filter-tabs">
+              {[['','Все'],['in','Приход'],['out','Расход'],['defect','Брак'],['write_off','Списание']].map(([v,l]) => (
+                <button key={v} className={`filter-tab${opsFilter===v?' active':''}`} onClick={() => setOpsFilter(v)}>{l}</button>
+              ))}
+            </div>
+            <div className="toolbar admin-warehouse-ops-toolbar warehouse-ops-toolbar" style={{ marginBottom: 0 }}>
               <select value={companyFilter} onChange={e => { setCompanyFilter(e.target.value); setProductFilter(''); }}>
                 <option value="">Все компании</option>
                 {companies?.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
@@ -249,25 +307,31 @@ export default function Warehouse() {
                 {filterProductRows.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
               </select>
               <input type="datetime-local" value={dateFrom} onChange={e => setDateFrom(e.target.value)} />
+              <span className="warehouse-filter-sep">—</span>
               <input type="datetime-local" value={dateTo} onChange={e => setDateTo(e.target.value)} />
+              <Button variant="secondary" size="sm" onClick={resetOpsFilters}>Сбросить</Button>
             </div>
           </div>
           {ol ? <Spinner /> : opsCards.length === 0 ? <Empty /> : (
             <>
-              <div className="desktop-only table-wrap">
-              <table>
-                <thead><tr><th>Дата</th><th>Товар</th><th>Компания</th><th>Тип</th><th style={{textAlign:'right'}}>Кол-во</th><th>Заявка</th></tr></thead>
+              <div className="desktop-only table-wrap warehouse-table-wrap">
+              <table className="warehouse-table">
+                <thead><tr><th>Дата / Кто</th><th>Товар</th><th>Компания</th><th>Тип</th><th className="tr-right">Кол-во</th><th>Заявка</th><th>Комментарий</th></tr></thead>
                 <tbody>
                   {opsCards.map(o => (
                     <tr key={o.id}>
-                      <td className="text-muted text-sm">{new Date(o.created_at).toLocaleDateString('ru-RU')}</td>
-                      <td><div style={{fontWeight:500,maxWidth:140}} className="truncate">{o.product_name}</div><div className="text-muted text-sm mono">{o.article}</div></td>
-                      <td className="text-muted truncate" style={{maxWidth:140}}>{o.company_name}</td>
+                      <td>
+                        <div className="warehouse-cell-primary">{formatDate(o.created_at)}</div>
+                        <div className="warehouse-cell-sub">{o.created_by_name || 'Система'}</div>
+                      </td>
+                      <td><div className="warehouse-cell-primary warehouse-product-cell">{o.product_name}</div><div className="text-muted text-sm mono">{o.article}</div></td>
+                      <td className="text-muted warehouse-company-cell">{o.company_name}</td>
                       <td><Badge variant={OP_VARIANTS[o.op_type]||'gray'}>{OP_LABELS[o.op_type]}</Badge></td>
-                      <td className="text-right" style={{ fontWeight:600, color: ['in','defect_return'].includes(o.op_type) ? 'var(--teal-400)' : 'var(--red-400)' }}>
+                      <td className="tr-right" style={{ fontWeight:600, color: ['in','defect_return'].includes(o.op_type) ? 'var(--teal-400)' : 'var(--red-400)' }}>
                         {['in','defect_return'].includes(o.op_type) ? '+' : '−'}{fmt(o.quantity)}
                       </td>
                       <td className="text-muted text-sm">{o.order_number ? `#${o.order_number}` : '—'}</td>
+                      <td className="warehouse-comment-cell">{o.note || '—'}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -310,28 +374,51 @@ export default function Warehouse() {
         {tab === 'defects' && (
           defectCards.length === 0 ? <Empty text="Брака нет 🎉" /> : (
             <>
-              <div className="desktop-only table-wrap">
-              <table>
-                <thead><tr><th>Товар</th><th>Компания</th><th style={{textAlign:'right'}}>Брак</th><th style={{textAlign:'right'}}>Всего</th><th>Платное хранение</th></tr></thead>
+              <div className="desktop-only warehouse-defect-top">
+                <div className="warehouse-defect-stat">
+                  <div className="warehouse-defect-label">Позиций с браком</div>
+                  <div className="warehouse-defect-value">{fmt(defectPositionCount)}</div>
+                </div>
+                <div className="warehouse-defect-stat">
+                  <div className="warehouse-defect-label">Единиц брака</div>
+                  <div className="warehouse-defect-value">{fmt(totalDefects)}</div>
+                </div>
+                <div className="warehouse-defect-stat">
+                  <div className="warehouse-defect-label">% от остатка</div>
+                  <div className="warehouse-defect-value">{defectPercent.toFixed(1)}%</div>
+                </div>
+              </div>
+              <div className="desktop-only table-wrap warehouse-table-wrap">
+              <table className="warehouse-table">
+                <thead><tr><th>Товар</th><th>Компания</th><th className="tr-right">Брак</th><th className="tr-right">Остаток</th><th className="tr-right">% брака</th><th>Платное хранение</th><th style={{ width: 90 }} /></tr></thead>
                 <tbody>
-                  {defectCards.map(d => (
+                  {defectCards.map(d => {
+                    const defectPct = Number(d.quantity) > 0 ? Math.round((Number(d.defect_qty) / Number(d.quantity)) * 100) : 0;
+                    return (
                     <tr key={d.id}>
-                      <td><div style={{fontWeight:500}}>{d.product_name}</div><div className="text-muted text-sm mono">{d.article}</div></td>
+                      <td><div className="warehouse-cell-primary">{d.product_name}</div><div className="text-muted text-sm mono">{d.article}</div></td>
                       <td className="text-muted">{d.company_name}</td>
-                      <td className="text-right" style={{fontWeight:600,color:'var(--red-400)'}}>{fmt(d.defect_qty)}</td>
-                      <td className="text-right text-muted">{fmt(d.quantity)}</td>
+                      <td className="tr-right" style={{fontWeight:600,color:'var(--red-400)'}}>{fmt(d.defect_qty)}</td>
+                      <td className="tr-right text-muted">{fmt(d.quantity)}</td>
+                      <td className="tr-right">
+                        <span className={`warehouse-pct-badge${defectPct >= 10 ? ' warehouse-pct-badge-high' : ''}`}>{defectPct}%</span>
+                      </td>
                       <td>
-                        <label className="switch-inline">
+                        <label className="switch-inline warehouse-paid-switch">
                           <input
                             type="checkbox"
                             checked={Boolean(d.paid_storage)}
                             onChange={(event) => togglePaidStorage.mutate({ productId: d.product_id, paid_storage: event.target.checked })}
                           />
-                          <span>{d.paid_storage ? 'Вкл.' : 'Выкл.'}</span>
+                          <span>{d.paid_storage ? 'Включено' : 'Выключено'}</span>
                         </label>
                       </td>
+                      <td className="tr-right">
+                        <Button variant="secondary" size="sm" disabled>Списать</Button>
+                      </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
               </div>

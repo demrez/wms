@@ -1,14 +1,20 @@
 import { useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { useCompanies, useProducts, useCreateOrder, useImportOrderItemsXlsx, useLogisticsReference, useTariffs, useCreateCharge, useConsumables } from '../hooks/queries';
-import { PageHeader, Button, Input, Select, fmt } from '../components/ui';
+import { Navigate, useNavigate } from 'react-router-dom';
+import { useCompanies, useProducts, useCreateOrder, useImportOrderItemsXlsx, useCreateOrderFromXlsx, useLogisticsReference, useTariffs, useCreateCharge, useConsumables } from '../hooks/queries';
+import { Button, Input, Select, fmt } from '../components/ui';
 import useDismissibleDropdown from '../hooks/useDismissibleDropdown';
+import { useAuthStore } from '../store/auth';
 
 const TYPE_OPTIONS = [
   { key: 'supply',     label: 'Поставка',   sub: 'Заявка на поставку товаров' },
   { key: 'processing', label: 'Обработка',  sub: 'Обработка товаров' },
   { key: 'logistics',  label: 'Логистика',  sub: 'Логистические услуги' },
 ];
+const TYPE_OPTION_CLASS = {
+  supply: 'is-supply',
+  processing: 'is-processing',
+  logistics: 'is-logistics',
+};
 const DEFAULT_WAREHOUSE_GROUPS = [
   {
     key: 'wb',
@@ -74,9 +80,36 @@ const clampMoney = (value) => Math.max(0, Number(value || 0));
 const clampQty = (value) => Math.max(1, Number(value || 1));
 const calcTotal = (unitPrice, quantity) => Number((clampMoney(unitPrice) * clampQty(quantity)).toFixed(2));
 const normalizeProductList = (data) => (Array.isArray(data) ? data : data?.items || []);
+const TYPE_OPTION_ICON = {
+  supply: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" width="22" height="22">
+      <rect x="2" y="7" width="20" height="14" rx="2" />
+      <path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2" />
+      <path d="M12 12v4m-2-2h4" />
+    </svg>
+  ),
+  processing: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" width="22" height="22">
+      <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
+    </svg>
+  ),
+  logistics: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" width="22" height="22">
+      <path d="M1 3h15v13H1z" />
+      <path d="M16 8h4l3 3v5h-7V8z" />
+      <circle cx="5.5" cy="18.5" r="2.5" />
+      <circle cx="18.5" cy="18.5" r="2.5" />
+    </svg>
+  ),
+};
 
 export default function NewOrder() {
   const navigate = useNavigate();
+  const user = useAuthStore((state) => state.user);
+  const isClientUser = user?.role === 'client';
+  if (isClientUser) {
+    return <Navigate to="/client/new-order" replace />;
+  }
   const [type, setType] = useState('supply');
   const [companyId, setCompanyId] = useState('');
   const [comment, setComment] = useState('');
@@ -89,7 +122,9 @@ export default function NewOrder() {
   const [supply, setSupply] = useState({ delivery_type: 'Водитель Фулфилмента', places_count: 0, weight_kg: 0 });
   const [logistics, setLogistics] = useState({ dest_type: 'direct', dest_warehouse: '', ship_date: '', pass_number: '' });
   const [warehouseMarketplace, setWarehouseMarketplace] = useState('wb');
+  const [serviceMode, setServiceMode] = useState('template');
   const [serviceQuery, setServiceQuery] = useState('');
+  const [customServiceName, setCustomServiceName] = useState('');
   const [selectedTariffCode, setSelectedTariffCode] = useState('');
   const [serviceQuantity, setServiceQuantity] = useState(1);
   const [serviceUnitPrice, setServiceUnitPrice] = useState('');
@@ -110,6 +145,7 @@ export default function NewOrder() {
   const consumableDropdownRef = useDismissibleDropdown(consumableMenuOpen, () => setConsumableMenuOpen(false));
   const productDropdownRef = useDismissibleDropdown(productMenuOpen, () => setProductMenuOpen(false));
   const importInputRef = useRef(null);
+  const createFromImportInputRef = useRef(null);
 
   const { data: companies } = useCompanies();
   const { data: products } = useProducts(
@@ -122,6 +158,7 @@ export default function NewOrder() {
   const { data: consumables } = useConsumables();
   const createOrder = useCreateOrder();
   const importOrderItemsXlsx = useImportOrderItemsXlsx();
+  const createOrderFromXlsx = useCreateOrderFromXlsx();
   const createCharge = useCreateCharge();
   const availableProducts = normalizeProductList(products);
   const selectedCompany = (companies || []).find((company) => company.id === companyId) || null;
@@ -186,6 +223,7 @@ export default function NewOrder() {
     return item.name?.toLowerCase().includes(query) || item.description?.toLowerCase().includes(query) || item.code?.toLowerCase().includes(query);
   });
   const selectedTariff = (tariffs || []).find((item) => item.code === selectedTariffCode);
+  const serviceDraftName = serviceMode === 'custom' ? customServiceName.trim() : serviceQuery.trim();
   const selectedServiceBasePrice = selectedTariff
     ? clampMoney(serviceUnitPrice === '' ? selectedTariff.price || 0 : serviceUnitPrice)
     : clampMoney(serviceUnitPrice);
@@ -287,8 +325,64 @@ export default function NewOrder() {
       setImportStatus(e.response?.data?.error || 'Не удалось импортировать Excel');
     }
   };
+  const handleCreateOrderFromFile = async (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    if (!companyId) {
+      setImportStatus('Сначала выберите компанию, затем загрузите Excel.');
+      return;
+    }
+
+    setImportStatus('');
+    setError('');
+
+    try {
+      const payload = {
+        file,
+        company_id: companyId,
+        type,
+        comment: normalizeOptionalText(comment),
+        ...(type === 'supply'
+          ? {
+              supply: {
+                delivery_type: supply.delivery_type,
+                delivery_date: normalizeOptionalText(supply.delivery_date),
+                pickup_address:
+                  supply.delivery_type === 'Самостоятельно'
+                    ? undefined
+                    : companyOverride(supply.pickup_address, selectedCompany?.address),
+                places_count: Number(supply.places_count || 0),
+                weight_kg: Number(supply.weight_kg || 0),
+                volume_m3: Number(supply.volume_m3 || 0),
+                cargo_number:
+                  supply.delivery_type === 'Самостоятельно'
+                    ? undefined
+                    : normalizeOptionalText(supply.cargo_number),
+                contact_name:
+                  supply.delivery_type === 'Самостоятельно'
+                    ? undefined
+                    : companyOverride(supply.contact_name, selectedCompany?.contact_name),
+                contact_phone:
+                  supply.delivery_type === 'Самостоятельно'
+                    ? undefined
+                    : companyOverride(supply.contact_phone, selectedCompany?.phone),
+              },
+            }
+          : {}),
+        ...(type === 'logistics' ? { logistics } : {}),
+      };
+
+      const result = await createOrderFromXlsx.mutateAsync(payload);
+      navigate(`/orders/${result.order.id}`);
+    } catch (e) {
+      setImportStatus(e.response?.data?.error || 'Не удалось создать заявку из Excel');
+    }
+  };
   const resetServiceDraft = () => {
+    setServiceMode('template');
     setServiceQuery('');
+    setCustomServiceName('');
     setSelectedTariffCode('');
     setServiceQuantity(1);
     setServiceUnitPrice('');
@@ -296,16 +390,17 @@ export default function NewOrder() {
     setServiceMenuOpen(false);
   };
   const addService = () => {
-    if (!selectedTariff) return;
+    if (!selectedTariff && !serviceDraftName) return;
     const quantity = clampQty(serviceQuantity);
     const base_price = clampMoney(selectedServiceBasePrice);
     const discount = selectedServiceDiscount;
+    const isManualService = serviceMode === 'custom' || !selectedTariff;
     setServices((prev) => [
       ...prev,
       normalizeServiceRow({
-        tariff_code: selectedTariff.code,
-        name: selectedTariff.name,
-        description: selectedTariff.description,
+        tariff_code: selectedTariff?.code || 'custom_manual',
+        name: selectedTariff?.name || serviceDraftName,
+        description: selectedTariff?.description || (isManualService ? 'Своя услуга' : ''),
         quantity,
         base_price,
         discount,
@@ -365,13 +460,15 @@ export default function NewOrder() {
         type,
         comment: normalizeOptionalText(comment),
         items: items.map(({ product_id, quantity }) => ({ product_id, quantity })),
-        consumables: consumablesUsed.map(({ consumable_id, quantity, unit_price, discount, comment: note }) => ({
-          consumable_id,
-          quantity,
-          unit_price,
-          discount,
-          comment: normalizeOptionalText(note),
-        })),
+        ...(!isClientUser ? {
+          consumables: consumablesUsed.map(({ consumable_id, quantity, unit_price, discount, comment: note }) => ({
+            consumable_id,
+            quantity,
+            unit_price,
+            discount,
+            comment: normalizeOptionalText(note),
+          })),
+        } : {}),
         ...(type === 'supply' ? {
           supply: {
             delivery_type: supply.delivery_type,
@@ -389,7 +486,8 @@ export default function NewOrder() {
         ...(type === 'logistics' ? { logistics } : {}),
       };
       const order = await createOrder.mutateAsync(payload);
-      for (const service of services) {
+      if (!isClientUser) {
+        for (const service of services) {
           await createCharge.mutateAsync({
             company_id: companyId,
             order_id: order.id,
@@ -400,41 +498,492 @@ export default function NewOrder() {
             description: `${service.name}${service.discount > 0 ? ` (скидка ${service.discount}%)` : ''}`,
           });
         }
+      }
       navigate(`/orders/${order.id}`);
     } catch (e) {
       setError(e.response?.data?.error || 'Ошибка создания заявки');
     }
   };
 
-  return (
-    <div className="max-w-3xl new-order-page">
-      <PageHeader title="Новая заявка" />
+  const selectedType = TYPE_OPTIONS.find((option) => option.key === type) || TYPE_OPTIONS[0];
+  const sectionTitle = type === 'logistics' ? 'Логистика на МП' : selectedType?.label;
+  const parameterTitle = type === 'supply'
+    ? 'Параметры поставки'
+    : type === 'logistics'
+      ? 'Маршрут и отгрузка'
+      : 'Параметры обработки';
+  const parameterHint = type === 'supply'
+    ? 'Укажите, как и когда привезут груз, чтобы склад принял его без уточнений.'
+    : type === 'logistics'
+      ? 'Выберите маркетплейс, склад назначения и параметры отгрузки.'
+      : 'Для обработки достаточно состава товаров и общего комментария к заявке.';
+  const canSubmit = Boolean(companyId) && items.length > 0 && !createOrder.isPending;
+  const totalQty = items.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
+  const blockHeader = (num, title, hint) => (
+    <div className="client-new-order-block-head">
+      <div className="client-new-order-block-copy">
+        <div className="client-new-order-block-num">{num}</div>
+        <div>
+          <div className="client-new-order-block-title">{title}</div>
+          {hint && <div className="client-new-order-block-hint">{hint}</div>}
+        </div>
+      </div>
+      {num === 1 && items.length > 0 && (
+        <div className="client-new-order-block-count">{items.length}</div>
+      )}
+    </div>
+  );
 
-      {/* Тип заявки */}
-      <div className="new-order-section">
-        <h2 className="new-order-section-title">Тип заявки</h2>
-        <div className="grid grid-cols-3 gap-3">
-          {TYPE_OPTIONS.map(t => (
-            <button key={t.key} onClick={() => setType(t.key)}
-              className={`text-left border rounded-xl p-4 transition-colors ${
-                type === t.key ? 'border-teal-500 bg-teal-50' : 'border-gray-200 bg-gray-50 hover:border-gray-300 hover:bg-gray-100'
-              }`}>
-              <div className={`text-sm font-medium mb-1 ${type === t.key ? 'text-teal-700' : 'text-gray-800'}`}>{t.label}</div>
-              <div className="text-xs text-gray-400">{t.sub}</div>
-            </button>
-          ))}
+  return (
+    <div className="client-page client-new-order-page admin-new-order-page">
+      <div className="client-new-order-head">
+        <div>
+          <div className="client-new-order-title">Создание заявки</div>
+          <div className="client-new-order-subtitle">
+            Соберите состав, параметры и комментарий в той же рабочей области, что и в кабинете клиента.
+          </div>
         </div>
       </div>
 
-      {/* Компания */}
-      <div className="new-order-section">
-        <h2 className="new-order-section-title">Компания</h2>
-        <Select value={companyId} onChange={e => { setCompanyId(e.target.value); setItems([]); }}>
-          <option value="">Выберите компанию</option>
-          {companies?.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-        </Select>
+      <div className="client-new-order-type-shell">
+        <div className="client-type-grid client-new-order-type-grid">
+          {TYPE_OPTIONS.map((option) => {
+            const selected = type === option.key;
+            return (
+              <button
+                key={option.key}
+                type="button"
+                onClick={() => setType(option.key)}
+                className={`client-new-order-type-card${selected ? ' active' : ''}`}
+              >
+                <div className={`client-new-order-type-icon ${TYPE_OPTION_CLASS[option.key] || ''}`.trim()}>
+                  {TYPE_OPTION_ICON[option.key]}
+                </div>
+                <div className="client-new-order-type-copy">
+                  <div className="client-new-order-type-title">{option.label}</div>
+                  <div className="client-new-order-type-sub">{option.sub}</div>
+                </div>
+              </button>
+            );
+          })}
+        </div>
       </div>
 
+      <div className="client-new-order-shell">
+        <div className="client-new-order-shell-head">
+          <div className="client-new-order-shell-num">1</div>
+          <div>
+            <div className="client-new-order-shell-title">{sectionTitle}</div>
+            <div className="client-new-order-shell-subtitle">{selectedType?.sub}</div>
+          </div>
+        </div>
+
+        <div className="client-new-order-shell-body">
+          <div className={`client-new-order-layout${type === 'processing' ? ' is-processing' : ''}`}>
+            <section className="client-new-order-panel">
+              {blockHeader(1, 'Компания и товары', 'Выберите клиента, добавьте позиции и при необходимости загрузите Excel.')}
+
+              <div className="client-new-order-field-group">
+                <label className="client-new-order-label">Компания</label>
+                <select
+                  value={companyId}
+                  onChange={(event) => {
+                    setCompanyId(event.target.value);
+                    setItems([]);
+                  }}
+                  className="client-new-order-select"
+                >
+                  <option value="">Выберите компанию</option>
+                  {companies?.map((company) => (
+                    <option key={company.id} value={company.id}>{company.name}</option>
+                  ))}
+                </select>
+              </div>
+
+              {!companyId ? (
+                <div className="client-new-order-items-summary">
+                  <span className="client-new-order-items-summary-icon">○</span>
+                  <span>Выберите компанию, чтобы добавить товары</span>
+                </div>
+              ) : (
+                <>
+                  <div className="client-new-order-product-search" ref={productDropdownRef}>
+                    <label className="client-new-order-label">Товар</label>
+                    <input
+                      value={productQuery}
+                      onFocus={() => setProductMenuOpen(true)}
+                      onChange={(event) => {
+                        setProductQuery(event.target.value);
+                        setSelectedProductId('');
+                        setProductMenuOpen(true);
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter') {
+                          event.preventDefault();
+                          addSelectedProduct();
+                        }
+                      }}
+                      placeholder="Поиск по названию, артикулу или штрихкоду"
+                      className="client-new-order-input client-new-order-input-search"
+                    />
+                    <svg className="client-new-order-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <circle cx="11" cy="11" r="8" />
+                      <path d="m21 21-4.35-4.35" />
+                    </svg>
+                    {showProductSuggestions && (
+                      <div className="services-search-dropdown">
+                        {availableProducts
+                          .filter((product) => !items.find((item) => item.product_id === product.id))
+                          .slice(0, 12)
+                          .map((product) => (
+                            <button
+                              key={product.id}
+                              type="button"
+                              className="services-search-option"
+                              onMouseDown={(event) => {
+                                event.preventDefault();
+                                pickProduct(product);
+                              }}
+                            >
+                              <div>{product.name}</div>
+                              <div className="client-new-order-search-option-meta">
+                                {product.article ? `${product.article} · ` : ''}
+                                {product.barcode ? `Баркод ${product.barcode}` : 'Баркод не указан'}
+                              </div>
+                            </button>
+                          ))}
+                        {productQuery.trim() && !availableProducts.filter((product) => !items.find((item) => item.product_id === product.id)).length && (
+                          <div className="services-search-option client-new-order-search-empty">
+                            Ничего не найдено
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="client-new-order-product-actions">
+                    <div className="client-new-order-qty-field">
+                      <label className="client-new-order-label">Кол-во</label>
+                      <input
+                        type="number"
+                        min="1"
+                        value={productQty}
+                        onChange={(event) => setProductQty(event.target.value)}
+                        className="client-new-order-input client-new-order-input-right"
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={addSelectedProduct}
+                      className="client-new-order-action-btn client-new-order-action-btn-primary"
+                    >
+                      + Добавить
+                    </button>
+                    <div className="client-new-order-actions-secondary">
+                      <button
+                        type="button"
+                        onClick={() => importInputRef.current?.click()}
+                        disabled={importOrderItemsXlsx.isPending}
+                        className="client-new-order-action-btn client-new-order-action-btn-secondary"
+                      >
+                        {importOrderItemsXlsx.isPending ? 'Импорт...' : 'Импорт Excel'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => createFromImportInputRef.current?.click()}
+                        disabled={createOrderFromXlsx.isPending}
+                        className="client-new-order-action-btn client-new-order-action-btn-secondary"
+                      >
+                        {createOrderFromXlsx.isPending ? 'Создаём...' : 'Создать из Excel'}
+                      </button>
+                    </div>
+                  </div>
+
+                  <input
+                    ref={importInputRef}
+                    type="file"
+                    accept=".xlsx"
+                    onChange={handleImportItemsFile}
+                    className="client-new-order-hidden-file-input"
+                  />
+                  <input
+                    ref={createFromImportInputRef}
+                    type="file"
+                    accept=".xlsx"
+                    onChange={handleCreateOrderFromFile}
+                    className="client-new-order-hidden-file-input"
+                  />
+
+                  {importStatus && (
+                    <div className={`client-new-order-import-status${importStatus.startsWith('Импортировано') ? ' is-success' : ' is-error'}`}>
+                      {importStatus}
+                    </div>
+                  )}
+
+                  <div className={`client-new-order-items-summary${items.length > 0 ? ' filled' : ''}`}>
+                    <span className="client-new-order-items-summary-icon">○</span>
+                    <span>
+                      {items.length > 0 ? `Просмотреть · ${items.length} товаров · ${fmt(totalQty)} шт` : 'Выберите товар, чтобы продолжить'}
+                    </span>
+                  </div>
+
+                  {items.length > 0 && (
+                    <div className="client-new-order-items-list">
+                      {items.map((item) => (
+                        <div key={item.product_id} className="client-new-order-item-row">
+                          <div className="client-new-order-item-main">
+                            <div className="client-new-order-item-name">{item.product_name}</div>
+                            <div className="client-new-order-item-article">{item.article || item.barcode || 'Артикул не указан'}</div>
+                          </div>
+                          <input
+                            type="number"
+                            min="1"
+                            value={item.quantity}
+                            onChange={(event) => setQty(item.product_id, Number(event.target.value))}
+                            className="client-new-order-item-qty client-new-order-input client-new-order-input-right client-new-order-input-compact client-new-order-input-pane"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => removeItem(item.product_id)}
+                            className="client-new-order-item-remove"
+                          >
+                            ×
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </>
+              )}
+            </section>
+
+            <section className="client-new-order-panel">
+              {blockHeader(2, parameterTitle, parameterHint)}
+
+              {type === 'supply' && (
+                <div className="client-new-order-form-stack">
+                  <div className="client-new-order-three-col-grid client-new-order-tight-grid">
+                    {['Водитель Фулфилмента', 'Самостоятельно', 'Транзитная поставка'].map((option) => (
+                      <button
+                        key={option}
+                        type="button"
+                        onClick={() => setSupplyField('delivery_type', option)}
+                        className={`client-new-order-choice-btn${supply.delivery_type === option ? ' active' : ''}`}
+                      >
+                        {option}
+                      </button>
+                    ))}
+                  </div>
+
+                  <div className="client-new-order-three-col-grid">
+                    <div>
+                      <label className="client-new-order-label">Дата и время поставки</label>
+                      <input
+                        type="datetime-local"
+                        value={supply.delivery_date || ''}
+                        onChange={(event) => setSupplyField('delivery_date', event.target.value)}
+                        className="client-new-order-input"
+                      />
+                    </div>
+                    <div>
+                      <label className="client-new-order-label">Количество мест</label>
+                      <input
+                        type="number"
+                        min="0"
+                        value={supply.places_count}
+                        onChange={(event) => setSupplyField('places_count', Number(event.target.value))}
+                        className="client-new-order-input client-new-order-input-right"
+                        placeholder="0"
+                      />
+                    </div>
+                    <div>
+                      <label className="client-new-order-label">Вес груза (кг)</label>
+                      <input
+                        type="number"
+                        min="0"
+                        value={supply.weight_kg}
+                        onChange={(event) => setSupplyField('weight_kg', Number(event.target.value))}
+                        className="client-new-order-input client-new-order-input-right"
+                        placeholder="0"
+                      />
+                    </div>
+                  </div>
+
+                  {supply.delivery_type !== 'Самостоятельно' && (
+                    <div className="client-new-order-two-col-grid">
+                      <div>
+                        <label className="client-new-order-label">Адрес откуда забрать</label>
+                        <input
+                          type="text"
+                          list="pickup-address-suggestions"
+                          placeholder={selectedCompany?.address || 'Введите адрес'}
+                          value={supply.pickup_address || ''}
+                          onChange={(event) => setSupplyField('pickup_address', event.target.value)}
+                          className="client-new-order-input"
+                        />
+                        <datalist id="pickup-address-suggestions">
+                          {companyAddressOptions.map((address) => (
+                            <option key={address} value={address} />
+                          ))}
+                        </datalist>
+                      </div>
+                      <div>
+                        <label className="client-new-order-label">Номер груза</label>
+                        <input
+                          value={supply.cargo_number || ''}
+                          onChange={(event) => setSupplyField('cargo_number', event.target.value)}
+                          className="client-new-order-input"
+                          placeholder="Введите номер"
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  {supply.delivery_type !== 'Самостоятельно' && (
+                    <div className="new-order-inline-note">
+                      <div>
+                        По умолчанию используем контакт и адрес компании
+                        {selectedCompany?.contact_name || selectedCompany?.phone || selectedCompany?.address
+                          ? `: ${[selectedCompany?.contact_name, selectedCompany?.phone, selectedCompany?.address].filter(Boolean).join(' · ')}`
+                          : '.'}
+                      </div>
+                      <button
+                        type="button"
+                        className="new-order-inline-link"
+                        onClick={() => setShowSupplyOverrides((value) => !value)}
+                      >
+                        {showSupplyOverrideFields ? 'Скрыть переопределение' : 'Указать другие данные'}
+                      </button>
+                    </div>
+                  )}
+
+                  {showSupplyOverrideFields && (
+                    <div className="client-new-order-two-col-grid">
+                      <div>
+                        <label className="client-new-order-label">Контакт по заявке</label>
+                        <input
+                          placeholder={selectedCompany?.contact_name || 'Оставить контакт компании'}
+                          value={supply.contact_name || ''}
+                          onChange={(event) => setSupplyField('contact_name', event.target.value)}
+                          className="client-new-order-input"
+                        />
+                      </div>
+                      <div>
+                        <label className="client-new-order-label">Телефон по заявке</label>
+                        <input
+                          placeholder={selectedCompany?.phone || '+7'}
+                          value={supply.contact_phone || ''}
+                          onChange={(event) => setSupplyField('contact_phone', event.target.value)}
+                          className="client-new-order-input"
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {type === 'logistics' && (
+                <div className="client-new-order-form-stack">
+                  <div>
+                    <label className="client-new-order-label">Тип маршрута</label>
+                    <div className="client-new-order-two-col-grid client-new-order-tight-grid">
+                      {[['transit', 'Транзитная поставка', 'Через транзитный склад'], ['direct', 'Прямая поставка', 'Напрямую на конечный склад']].map(([value, title, hint]) => (
+                        <button
+                          key={value}
+                          type="button"
+                          onClick={() => setLogField('dest_type', value)}
+                          className={`client-new-order-route-card${logistics.dest_type === value ? ' active' : ''}`}
+                        >
+                          <div className="client-new-order-route-title">{title}</div>
+                          <div className="client-new-order-route-hint">{hint}</div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="client-new-order-label">Маркетплейс</label>
+                    <div className="client-new-order-marketplace-row">
+                      {groupedWarehouseOptions.map((group) => (
+                        <button
+                          key={group.key}
+                          type="button"
+                          onClick={() => {
+                            setWarehouseMarketplace(group.key);
+                            setLogField('dest_warehouse', '');
+                          }}
+                          className={`client-new-order-marketplace-choice${warehouseMarketplace === group.key ? ' active' : ''}`}
+                        >
+                          {group.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="client-new-order-three-col-grid">
+                    <div>
+                      <label className="client-new-order-label">Склад назначения</label>
+                      <select
+                        value={logistics.dest_warehouse}
+                        onChange={(event) => setLogField('dest_warehouse', event.target.value)}
+                        className="client-new-order-select"
+                      >
+                        <option value="">Выберите склад {groupedWarehouseOptions.find((group) => group.key === warehouseMarketplace)?.label || ''}</option>
+                        {activeWarehouseOptions.map((warehouse) => (
+                          <option key={warehouse} value={warehouse}>{warehouse}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="client-new-order-label">Дата и время отгрузки</label>
+                      <input
+                        type="datetime-local"
+                        value={logistics.ship_date || ''}
+                        onChange={(event) => setLogField('ship_date', event.target.value)}
+                        className="client-new-order-input"
+                      />
+                    </div>
+                    <div>
+                      <label className="client-new-order-label">Номер пропуска</label>
+                      <input
+                        value={logistics.pass_number || ''}
+                        onChange={(event) => setLogField('pass_number', event.target.value)}
+                        className="client-new-order-input"
+                        placeholder="Введите номер"
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {type === 'processing' && (
+                <div className="client-new-order-processing-note">
+                  После создания заявки менеджер согласует состав работ по обработке. На этом шаге достаточно выбрать товары и оставить комментарий с пожеланиями по упаковке, маркировке или подготовке поставки.
+                </div>
+              )}
+            </section>
+          </div>
+
+          <section className="client-new-order-section client-new-order-comment-section">
+            {blockHeader(3, 'Общее ТЗ и комментарий', 'Добавьте инструкции по поставке, упаковке, логистике или особым условиям обработки.')}
+            <div className="client-new-order-comment-grid">
+              <button type="button" className="client-new-order-file-placeholder">
+                <span className="client-new-order-file-placeholder-icon">⌁</span>
+                Файлы скоро здесь
+              </button>
+              <textarea
+                value={comment}
+                onChange={(event) => setComment(event.target.value)}
+                className="client-new-order-input client-new-order-comment-input"
+                rows={5}
+                placeholder="Общее техническое задание для всей заявки..."
+              />
+            </div>
+          </section>
+        </div>
+      </div>
+
+      {!isClientUser && (
       <div className="new-order-section">
         <h2 className="new-order-section-title">Оказываемые услуги</h2>
 
@@ -450,7 +999,33 @@ export default function NewOrder() {
           <>
             <div className="services-editor-grid">
               <div className="services-search-wrap" ref={serviceDropdownRef}>
-                <label>Услуга</label>
+                <div className="services-action-row">
+                  <label>Услуга</label>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={serviceMode === 'custom' ? 'primary' : 'secondary'}
+                    onClick={() => {
+                      setServiceMode('custom');
+                      setSelectedTariffCode('');
+                      setServiceMenuOpen(false);
+                    }}
+                  >
+                    Своя услуга
+                  </Button>
+                </div>
+                {serviceMode === 'custom' ? (
+                  <div className="services-custom-panel">
+                    <input
+                      value={customServiceName}
+                      onChange={(event) => setCustomServiceName(event.target.value)}
+                      placeholder="Название своей услуги"
+                    />
+                    <div className="services-custom-note">
+                      Вы можете сразу ввести свою услугу и цену без выбора шаблона.
+                    </div>
+                  </div>
+                ) : null}
                 <input
                   value={serviceQuery}
                   onFocus={() => setServiceMenuOpen(true)}
@@ -458,6 +1033,7 @@ export default function NewOrder() {
                     setServiceQuery(event.target.value);
                     setSelectedTariffCode('');
                     setServiceMenuOpen(true);
+                    setServiceMode('template');
                   }}
                   placeholder="Начните вводить или выберите из списка..."
                 />
@@ -470,6 +1046,7 @@ export default function NewOrder() {
                         className="services-search-option"
                         onMouseDown={(event) => {
                           event.preventDefault();
+                          setServiceMode('template');
                           setSelectedTariffCode(tariff.code);
                           setServiceQuery(tariff.name);
                           setServiceUnitPrice(String(tariff.price ?? 0));
@@ -493,7 +1070,7 @@ export default function NewOrder() {
               />
             </div>
 
-            {selectedTariff && (
+            {(selectedTariff || serviceDraftName) && (
               <div className="table-wrap" style={{ marginTop: 12 }}>
                 <table>
                   <thead>
@@ -509,8 +1086,8 @@ export default function NewOrder() {
                   <tbody>
                     <tr>
                       <td>
-                        <div className="font-medium text-xs">{selectedTariff.name}</div>
-                        <div className="text-xs text-gray-400">{selectedTariff.description}</div>
+                        <div className="font-medium text-xs">{selectedTariff?.name || serviceDraftName}</div>
+                        <div className="text-xs text-gray-400">{selectedTariff?.description || 'Своя услуга без шаблона'}</div>
                       </td>
                       <td className="text-right">
                         <input
@@ -613,7 +1190,9 @@ export default function NewOrder() {
           </>
         )}
       </div>
+      )}
 
+      {!isClientUser && (
       <div className="new-order-section">
         <h2 className="new-order-section-title">Расходники</h2>
 
@@ -806,328 +1385,30 @@ export default function NewOrder() {
           </>
         )}
       </div>
+      )}
 
-      {/* Детали поставки */}
-      {type === 'supply' && (
-        <div className="new-order-section">
-          <h2 className="new-order-section-title">Детали поставки</h2>
-          <div className="grid grid-cols-2 gap-3">
-            <Select label="Тип доставки" value={supply.delivery_type} onChange={e => setSupplyField('delivery_type', e.target.value)}>
-              <option>Водитель Фулфилмента</option>
-              <option>Самостоятельно</option>
-              <option>Транзитная поставка</option>
-            </Select>
-            <Input label="Дата и время поставки" type="datetime-local"
-              onChange={e => setSupplyField('delivery_date', e.target.value)} />
-            {supply.delivery_type !== 'Самостоятельно' && (
-              <div className="form-group address-field">
-                <label>Адрес откуда забрать</label>
-                <input
-                  type="text"
-                  list="pickup-address-suggestions"
-                  placeholder={selectedCompany?.address || 'Введите адрес'}
-                  value={supply.pickup_address || ''}
-                  onChange={e => setSupplyField('pickup_address', e.target.value)}
-                />
-                <datalist id="pickup-address-suggestions">
-                  {companyAddressOptions.map((address) => (
-                    <option key={address} value={address} />
-                  ))}
-                </datalist>
-              </div>
-            )}
-            <Input label="Количество мест" className="compact-number-input" type="number" min="0"
-              value={supply.places_count}
-              onChange={e => setSupplyField('places_count', Number(e.target.value))} />
-            <Input label="Вес груза (кг)" className="compact-number-input" type="number" min="0"
-              value={supply.weight_kg}
-              onChange={e => setSupplyField('weight_kg', Number(e.target.value))} />
-          </div>
-          {supply.delivery_type !== 'Самостоятельно' && (
-            <div className="new-order-inline-note">
-              <div>
-                По умолчанию используем контакт и адрес компании
-                {selectedCompany?.contact_name || selectedCompany?.phone || selectedCompany?.address
-                  ? `: ${[selectedCompany?.contact_name, selectedCompany?.phone, selectedCompany?.address].filter(Boolean).join(' · ')}`
-                  : '.'}
-              </div>
-              <button
-                type="button"
-                className="new-order-inline-link"
-                onClick={() => setShowSupplyOverrides((value) => !value)}
-              >
-                {showSupplyOverrideFields ? 'Скрыть переопределение' : 'Указать другие данные'}
-              </button>
-            </div>
-          )}
-          {showSupplyOverrideFields && (
-            <div className="grid grid-cols-2 gap-3 mt-3">
-              <Input label="Номер груза"
-                value={supply.cargo_number || ''}
-                onChange={e => setSupplyField('cargo_number', e.target.value)} />
-              <Input label="Контакт по заявке"
-                placeholder={selectedCompany?.contact_name || 'Оставить контакт компании'}
-                value={supply.contact_name || ''}
-                onChange={e => setSupplyField('contact_name', e.target.value)} />
-              <Input label="Телефон по заявке" placeholder={selectedCompany?.phone || '+7'}
-                value={supply.contact_phone || ''}
-                onChange={e => setSupplyField('contact_phone', e.target.value)} />
-            </div>
-          )}
+      {error && (
+        <div className="client-new-order-error">
+          {error}
         </div>
       )}
 
-      {/* Детали логистики */}
-      {type === 'logistics' && (
-        <div className="new-order-section">
-          <h2 className="new-order-section-title">Логистика</h2>
-          <div className="grid grid-cols-2 gap-4 mb-4">
-            {[['transit', 'Транзитная поставка', 'Через транзитный склад'],
-              ['direct',  'Прямая поставка',     'Напрямую на конечный склад']].map(([v, label, sub]) => (
-              <button key={v} onClick={() => setLogField('dest_type', v)}
-                className={`text-left border rounded-xl p-4 transition-colors ${
-                  logistics.dest_type === v ? 'border-teal-500 bg-teal-50' : 'border-gray-200 bg-gray-50 hover:border-gray-300 hover:bg-gray-100'
-                }`}>
-                <div className={`text-sm font-medium mb-1 ${logistics.dest_type === v ? 'text-teal-700' : ''}`}>{label}</div>
-                <div className="text-xs text-gray-400">{sub}</div>
-              </button>
-            ))}
-          </div>
-          <div style={{ display:'flex', flexDirection:'column', gap:12, marginBottom:12 }}>
-            <div className="form-group">
-              <label>Маркетплейс</label>
-              <div className="client-card-grid-3" style={{ display:'grid', gridTemplateColumns:'repeat(3,minmax(0,1fr))', gap:8 }}>
-                {groupedWarehouseOptions.map((group) => (
-                  <button
-                    key={group.key}
-                    type="button"
-                    onClick={() => {
-                      setWarehouseMarketplace(group.key);
-                      setLogField('dest_warehouse', '');
-                    }}
-                    style={{
-                      border: warehouseMarketplace === group.key ? '2px solid var(--teal-400)' : '1px solid var(--gray-200)',
-                      background: warehouseMarketplace === group.key ? 'var(--teal-50)' : 'var(--surface-hover)',
-                      borderRadius: 14,
-                      padding: '12px 14px',
-                      textAlign: 'left',
-                      color: warehouseMarketplace === group.key ? 'var(--teal-600)' : 'var(--gray-900)',
-                      fontSize: 13,
-                      fontWeight: 700,
-                      cursor: 'pointer',
-                    }}
-                  >
-                    {group.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <Select label="Склад назначения" value={logistics.dest_warehouse} onChange={e => setLogField('dest_warehouse', e.target.value)}>
-              <option value="">Выберите склад {groupedWarehouseOptions.find((g) => g.key === warehouseMarketplace)?.label || ''}</option>
-              {activeWarehouseOptions.map((warehouse) => <option key={warehouse} value={warehouse}>{warehouse}</option>)}
-            </Select>
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <Input label="Дата и время отгрузки" type="datetime-local"
-              value={logistics.ship_date || ''}
-              onChange={e => setLogField('ship_date', e.target.value)} />
-            <Input label="Номер пропуска"
-              value={logistics.pass_number || ''}
-              onChange={e => setLogField('pass_number', e.target.value)} />
-          </div>
-        </div>
-      )}
-
-      {/* Товары */}
-      <div className="new-order-section">
-        <h2 className="new-order-section-title">Товары</h2>
-        {!companyId ? (
-          <div className="new-order-empty">Выберите компанию, чтобы добавить товары</div>
-        ) : (
-          <>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 12, flexWrap: 'wrap' }}>
-              <div className="text-xs text-gray-400">
-                Можно загрузить Excel формата WB: баркод, количество, предмет, артикул поставщика, бренд, размер, цвет.
-              </div>
-              <div>
-                <input
-                  ref={importInputRef}
-                  type="file"
-                  accept=".xlsx"
-                  onChange={handleImportItemsFile}
-                  style={{ display: 'none' }}
-                />
-                <Button
-                  variant="secondary"
-                  onClick={() => importInputRef.current?.click()}
-                  disabled={importOrderItemsXlsx.isPending}
-                >
-                  {importOrderItemsXlsx.isPending ? 'Импортируем...' : 'Импорт из Excel'}
-                </Button>
-              </div>
-            </div>
-            {!!importStatus && (
-              <div
-                style={{
-                  marginBottom: 12,
-                  padding: '10px 12px',
-                  borderRadius: 10,
-                  background: importStatus.startsWith('Импортировано') ? 'rgba(32, 163, 118, 0.08)' : 'rgba(220, 38, 38, 0.08)',
-                  color: importStatus.startsWith('Импортировано') ? 'var(--green-700)' : 'var(--red-600)',
-                  fontSize: 12.5,
-                }}
-              >
-                {importStatus}
-              </div>
-            )}
-            <div ref={productDropdownRef} style={{ position: 'relative', marginBottom: 12 }}>
-              <label className="new-order-product-label">Товар</label>
-              <input
-                value={productQuery}
-                onFocus={() => setProductMenuOpen(true)}
-                onChange={(event) => {
-                  setProductQuery(event.target.value);
-                  setSelectedProductId('');
-                  setProductMenuOpen(true);
-                }}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter') {
-                    event.preventDefault();
-                    addSelectedProduct();
-                  }
-                }}
-                placeholder="Название, артикул или штрихкод (можно сканером)..."
-                className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500"
-              />
-              {showProductSuggestions && (
-                <div className="services-search-dropdown">
-                  {availableProducts
-                    .filter((p) => !items.find((item) => item.product_id === p.id))
-                    .slice(0, 10)
-                    .map((p) => (
-                      <button
-                        key={p.id}
-                        type="button"
-                        className="services-search-option"
-                        onMouseDown={(event) => {
-                          event.preventDefault();
-                          pickProduct(p);
-                        }}
-                      >
-                        <div>
-                          <div>{p.name}</div>
-                          <div className="text-muted text-xs">
-                            {p.article ? `${p.article} · ` : ''}
-                            {p.barcode ? `Баркод ${p.barcode}` : 'Баркод не указан'}
-                          </div>
-                        </div>
-                      </button>
-                    ))}
-                </div>
-              )}
-              {productMenuOpen && productQuery.trim() && !availableProducts.filter((p) => !items.find((item) => item.product_id === p.id)).length && (
-                <div className="services-search-dropdown">
-                  <div className="services-search-option" style={{ cursor: 'default' }}>
-                    Ничего не найдено
-                  </div>
-                </div>
-              )}
-            </div>
-
-            <div className="admin-new-order-item-row">
-              <Input
-                label="Кол-во"
-                className="compact-number-input"
-                type="number"
-                min="1"
-                value={productQty}
-                onChange={e => setProductQty(e.target.value)}
-              />
-              <div className="admin-new-order-item-action">
-                <Button onClick={addSelectedProduct}>Добавить</Button>
-              </div>
-            </div>
-
-            {items.length > 0 && (
-              <>
-                <div className="desktop-only">
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="text-gray-400 border-b border-gray-100 text-xs">
-                        <th className="text-left pb-2 font-medium">Товар</th>
-                        <th className="text-right pb-2 font-medium">Кол-во</th>
-                        <th className="pb-2" />
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {items.map(item => (
-                        <tr key={item.product_id} className="border-b border-gray-50">
-                          <td className="py-2">
-                            <div className="font-medium text-xs">{item.product_name}</div>
-                            <div className="text-xs text-gray-400">{item.article}</div>
-                          </td>
-                          <td className="py-2 text-right">
-                            <input type="number" min="1" value={item.quantity}
-                              onChange={e => setQty(item.product_id, Number(e.target.value))}
-                              className="w-20 border border-gray-200 rounded px-2 py-1 text-xs text-right" />
-                          </td>
-                          <td className="py-2 text-right">
-                            <button onClick={() => removeItem(item.product_id)}
-                              className="text-gray-300 hover:text-red-400 text-sm">✕</button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-
-                <div className="mobile-only admin-new-order-items-mobile">
-                  {items.map((item) => (
-                    <div key={item.product_id} className="admin-new-order-item-card">
-                      <div>
-                        <div className="admin-new-order-item-title">{item.product_name}</div>
-                        <div className="admin-new-order-item-sub">{item.article || 'Артикул не указан'}</div>
-                      </div>
-                      <div className="admin-new-order-item-controls">
-                        <input
-                          type="number"
-                          min="1"
-                          value={item.quantity}
-                          onChange={e => setQty(item.product_id, Number(e.target.value))}
-                          className="qty-input"
-                        />
-                        <button
-                          type="button"
-                          className="admin-new-order-item-remove"
-                          onClick={() => removeItem(item.product_id)}
-                        >
-                          Убрать
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </>
-            )}
-          </>
-        )}
-      </div>
-
-      {/* Комментарий */}
-      <div className="new-order-section" style={{ marginBottom: 20 }}>
-        <h2 className="new-order-section-title">Комментарий</h2>
-        <textarea value={comment} onChange={e => setComment(e.target.value)}
-          className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-teal-500"
-          rows={3} placeholder="Дополнительная информация..." />
-      </div>
-
-      {error && <div className="text-sm text-red-600 bg-red-50 rounded-xl px-4 py-3 mb-4">{error}</div>}
-
-      <div className="new-order-actions">
-        <Button onClick={handleSubmit} disabled={createOrder.isPending} size="lg">
+      <div className="client-new-order-footer">
+        <button
+          type="button"
+          onClick={handleSubmit}
+          disabled={!canSubmit}
+          className="client-new-order-submit"
+        >
           {createOrder.isPending ? 'Создаём...' : 'Отправить заявку'}
-        </Button>
-        <Button variant="secondary" onClick={() => navigate(-1)} size="lg">Отмена</Button>
+        </button>
+        <button
+          type="button"
+          onClick={() => navigate(-1)}
+          className="client-new-order-cancel"
+        >
+          Отмена
+        </button>
       </div>
     </div>
   );

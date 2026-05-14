@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { useEffect, useState } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
 import { useInvoices, useGenerateInvoice, useUpdateInvoice, useCompanies } from '../hooks/queries';
 import { PageHeader, Button, Input, Select, fmt, Spinner, Empty, Badge } from '../components/ui';
 import api from '../api/client';
@@ -72,11 +72,28 @@ function GeneratePanel({ onClose }) {
 
 export default function Invoices() {
   const qc = useQueryClient();
-  const { data: invoices, isLoading } = useInvoices();
+  const { data: companies } = useCompanies();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const initialCompanyId = searchParams.get('company_id') || '';
+  const [companyId, setCompanyId] = useState(initialCompanyId);
+  const { data: invoices, isLoading } = useInvoices({ ...(companyId ? { company_id: companyId } : {}) });
   const updateInvoice = useUpdateInvoice();
   const [view, setView] = useState('list');
   const [pdfLoading, setPdfLoading] = useState(null);
   const [filterStatus, setFilterStatus] = useState('');
+
+  useEffect(() => {
+    const nextCompanyId = searchParams.get('company_id') || '';
+    setCompanyId((current) => (current === nextCompanyId ? current : nextCompanyId));
+  }, [searchParams]);
+
+  const handleCompanyChange = (nextCompanyId) => {
+    setCompanyId(nextCompanyId);
+    const nextParams = new URLSearchParams(searchParams);
+    if (nextCompanyId) nextParams.set('company_id', nextCompanyId);
+    else nextParams.delete('company_id');
+    setSearchParams(nextParams, { replace: true });
+  };
 
   const genPdf = async (id) => {
     setPdfLoading(id);
@@ -135,6 +152,12 @@ export default function Invoices() {
       </div>
 
       <div className="toolbar">
+        <Select value={companyId} onChange={e => handleCompanyChange(e.target.value)}>
+          <option value="">Все компании</option>
+          {(companies || []).map((company) => (
+            <option key={company.id} value={company.id}>{company.name}</option>
+          ))}
+        </Select>
         <div className="filter-tabs">
           {[['','Все'],['draft','Черновик'],['sent','Отправлено'],['paid','Оплачено'],['deferred','Отсрочка'],['cancelled','Отменено']].map(([v,l]) => (
             <button key={v} className={`filter-tab${filterStatus===v?' active':''}`} onClick={() => setFilterStatus(v)}>{l}</button>

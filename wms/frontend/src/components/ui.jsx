@@ -73,18 +73,18 @@ export function PageHeader({ title, children }) {
   );
 }
 
-const STAGE_LABELS = {
+export const STAGE_LABELS = {
   new: 'Новая', approval: 'Согласование', pickup: 'Забор груза',
   in_transit: 'В пути', receiving: 'Приёмка', accepted: 'Принято',
   waiting: 'Ожидает', in_progress: 'В работе', delivered: 'Доставлено', mp_shipping: 'Отгрузка на МП', done: 'Готово',
 };
-const STAGE_VARIANTS = {
+export const STAGE_VARIANTS = {
   new: 'gray', approval: 'amber', pickup: 'blue', in_transit: 'blue',
   receiving: 'purple', accepted: 'green', waiting: 'amber',
   in_progress: 'purple', delivered: 'blue', mp_shipping: 'blue', done: 'green',
 };
-const TYPE_LABELS   = { supply: 'Поставка', processing: 'Обработка', logistics: 'Логистика' };
-const TYPE_VARIANTS = { supply: 'green', processing: 'blue', logistics: 'gray' };
+export const TYPE_LABELS   = { supply: 'Поставка', processing: 'Обработка', logistics: 'Логистика' };
+export const TYPE_VARIANTS = { supply: 'green', processing: 'blue', logistics: 'gray' };
 
 export const StageBadge = ({ stage }) => (
   <Badge variant={STAGE_VARIANTS[stage] || 'gray'}>{STAGE_LABELS[stage] || stage}</Badge>

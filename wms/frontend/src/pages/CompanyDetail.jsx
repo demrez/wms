@@ -128,6 +128,8 @@ export default function CompanyDetail() {
   const productsCount = Number(company.stock?.products_count || 0);
   const totalOrders = Number(company.orders?.total_orders || 0);
   const activeOrders = Number(company.orders?.active_orders || 0);
+  const totalInvoices = Number(company.invoices?.total_invoices || 0);
+  const activeInvoices = Number(company.invoices?.active_invoices || 0);
 
   return (
     <div>
@@ -152,27 +154,32 @@ export default function CompanyDetail() {
         </div>
       </div>
 
-      <div className="stats-grid">
-        <div className="stat-card">
+      <div className="stats-grid company-detail-stats-grid">
+        <button className="stat-card stat-card-clickable" type="button" onClick={() => navigate('/products')}>
           <div className="stat-label">Товаров</div>
           <div className="stat-value">{fmt(productsCount)}</div>
           <div className="stat-sub">в каталоге компании</div>
-        </div>
-        <div className="stat-card">
+        </button>
+        <button className="stat-card stat-card-clickable" type="button" onClick={() => navigate('/warehouse')}>
           <div className="stat-label">На складе</div>
           <div className="stat-value">{fmt(totalQty)}</div>
           <div className="stat-sub">текущий остаток</div>
-        </div>
-        <div className="stat-card">
+        </button>
+        <button className="stat-card stat-card-clickable" type="button" onClick={() => navigate('/warehouse?tab=defects')}>
           <div className="stat-label">Брак</div>
           <div className="stat-value" style={{ color: 'var(--red-400)' }}>{fmt(totalDefect)}</div>
           <div className="stat-sub">ед. на проверке</div>
-        </div>
-        <div className="stat-card">
+        </button>
+        <button className="stat-card stat-card-clickable" type="button" onClick={() => navigate(`/orders?company_id=${id}`)}>
           <div className="stat-label">Заявок</div>
           <div className="stat-value">{fmt(totalOrders)}</div>
           <div className="stat-sub">{fmt(activeOrders)} активных</div>
-        </div>
+        </button>
+        <button className="stat-card stat-card-clickable" type="button" onClick={() => navigate(`/invoices?company_id=${id}`)}>
+          <div className="stat-label">Счетов</div>
+          <div className="stat-value">{fmt(totalInvoices)}</div>
+          <div className="stat-sub">{fmt(activeInvoices)} активных</div>
+        </button>
       </div>
 
       <div className="grid-2">

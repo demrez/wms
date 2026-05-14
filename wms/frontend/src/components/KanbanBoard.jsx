@@ -1,6 +1,6 @@
-import { useNavigate } from 'react-router-dom';
 import { useKanban } from '../hooks/queries';
-import { TypeBadge, fmt, Spinner } from './ui';
+import { Spinner } from './ui';
+import AdminOrderCard from './AdminOrderCard';
 
 const COLUMNS = [
   { key: 'new',         label: 'Новые' },
@@ -13,19 +13,7 @@ const COLUMNS = [
 ];
 
 function KanbanCard({ order }) {
-  const navigate = useNavigate();
-  return (
-    <div className="kanban-card" onClick={() => navigate(`/orders/${order.id}`)}>
-      <div className="kanban-card-num">#{order.number}</div>
-      <div className="kanban-card-name">{order.company_name}</div>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6 }}>
-        <TypeBadge type={order.type} />
-        {order.total_qty > 0 && (
-          <span className="kanban-card-meta">{fmt(order.total_qty)} ед.</span>
-        )}
-      </div>
-    </div>
-  );
+  return <AdminOrderCard order={order} compact />;
 }
 
 export default function KanbanBoard() {
